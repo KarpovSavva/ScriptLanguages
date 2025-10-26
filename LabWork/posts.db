@@ -1,6 +1,0 @@
-CREATE TABLE posts (
-    id INTEGER PRIMARY KEY,
-    userId INTEGER,
-    title TEXT,
-    body TEXT
-);
