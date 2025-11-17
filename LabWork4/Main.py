@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QSpinBox, QTextEdit, QMessageBox, QHeaderView
 )
 from PyQt5.QtCore import Qt, QSortFilterProxyModel
-from PyQt5.QtSql import QSqlDatabase, QSqlTableModel
+from PyQt5.QtSql import QSqlDatabase, QSqlTableModel, QSqlQuery
 
 
 class AddRecordDialog(QDialog):
@@ -52,8 +52,8 @@ class AddRecordDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Управление записями")
-        self.resize(800, 600)
+        self.setWindowTitle("Управление записями (SQLite + PyQt5)")
+        self.resize(900, 600)
 
         self.db = None
         self.model = None
@@ -64,14 +64,30 @@ class MainWindow(QMainWindow):
 
     def init_db(self):
         self.db = QSqlDatabase.addDatabase("QSQLITE")
-        self.db.setDatabaseName("posts.db")  # Убедитесь, что файл posts.db существует
+        self.db.setDatabaseName("posts.db") 
 
         if not self.db.open():
-            QMessageBox.critical(self, "Ошибка", "Не удалось подключиться к базе данных!")
+            error = self.db.lastError().text()
+            QMessageBox.critical(self, "Ошибка БД", f"Не удалось открыть БД:\n{error}")
             sys.exit(1)
 
-        if "posts" not in self.db.tables():
-            QMessageBox.critical(self, "Ошибка", "Таблица 'posts' не найдена в базе данных!")
+        query = QSqlQuery(self.db)
+        if not query.exec_("PRAGMA table_info(posts);"):
+            QMessageBox.critical(self, "Ошибка", "Таблица 'posts' не найдена!")
+            sys.exit(1)
+
+        columns = []
+        while query.next():
+            columns.append(query.value(1)) 
+
+        required = ['id', 'userId', 'title', 'body']
+        missing = [col for col in required if col not in columns]
+        if missing:
+            QMessageBox.critical(
+                self, "Ошибка структуры",
+                f"Отсутствуют колонки в таблице 'posts': {', '.join(missing)}\n"
+                f"Доступные: {', '.join(columns)}"
+            )
             sys.exit(1)
 
     def init_ui(self):
@@ -82,7 +98,7 @@ class MainWindow(QMainWindow):
         search_layout = QHBoxLayout()
         search_layout.addWidget(QLabel("Поиск по заголовку:"))
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Введите текст для поиска...")
+        self.search_input.setPlaceholderText("Введите текст...")
         search_layout.addWidget(self.search_input)
         layout.addLayout(search_layout)
 
@@ -114,74 +130,94 @@ class MainWindow(QMainWindow):
         self.model = QSqlTableModel(self, self.db)
         self.model.setTable("posts")
         self.model.setEditStrategy(QSqlTableModel.OnManualSubmit)
-        self.model.select()
 
+        # Устанавливаем заголовки вручную
         self.model.setHeaderData(0, Qt.Horizontal, "ID")
         self.model.setHeaderData(1, Qt.Horizontal, "User ID")
         self.model.setHeaderData(2, Qt.Horizontal, "Title")
         self.model.setHeaderData(3, Qt.Horizontal, "Body")
 
+        if not self.model.select():
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить данные:\n{self.model.lastError().text()}")
+
+        # Прокси для фильтрации
         self.proxy_model = QSortFilterProxyModel()
         self.proxy_model.setSourceModel(self.model)
-        self.proxy_model.setFilterKeyColumn(2)  # Фильтр по колонке Title
+        self.proxy_model.setFilterKeyColumn(2)  
         self.proxy_model.setFilterCaseSensitivity(Qt.CaseInsensitive)
 
         self.table_view.setModel(self.proxy_model)
 
     def filter_table(self):
-        search_text = self.search_input.text()
-        self.proxy_model.setFilterFixedString(search_text)
+        text = self.search_input.text().strip()
+        self.proxy_model.setFilterFixedString(text)
 
     def refresh_table(self):
         self.model.select()
+        while self.model.canFetchMore():
+            self.model.fetchMore()
         self.filter_table()
 
     def add_record(self):
         dialog = AddRecordDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
-            user_id, title, body = dialog.get_data()
-            if not title or not body:
-                QMessageBox.warning(self, "Ошибка", "Title и Body пустые")
-                return
+        if dialog.exec_() != QDialog.Accepted:
+            return
 
-            record = self.model.record()
-            record.setValue("userId", user_id)
-            record.setValue("title", title)
-            record.setValue("body", body)
+        user_id, title, body = dialog.get_data()
+        if not title or not body:
+            QMessageBox.warning(self, "Ошибка", "Title и Body обязательны!")
+            return
 
-            if self.model.insertRecord(-1, record):
-                self.model.submitAll()
+        # Создаём запись
+        record = self.model.record()
+        record.setValue("userId", user_id)
+        record.setValue("title", title)
+        record.setValue("body", body)
+
+        # Вставляем в конец
+        row = self.model.rowCount()
+        if self.model.insertRow(row):
+            self.model.setRecord(row, record)
+            if self.model.submitAll():
                 self.refresh_table()
-                QMessageBox.information(self, "Успех", "Запись успешно добавлена!")
+                QMessageBox.information(self, "Успех", "Запись добавлена!")
             else:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось добавить запись:\n{self.model.lastError().text()}")
+                self.model.revertAll()
+                error = self.model.lastError().text()
+                QMessageBox.critical(self, "Ошибка добавления", f"Не удалось сохранить:\n{error}")
+        else:
+            QMessageBox.critical(self, "Ошибка", "Не удалось вставить строку.")
 
     def delete_record(self):
-        selected = self.table_view.selectionModel().selectedRows()
-        if not selected:
+        indexes = self.table_view.selectionModel().selectedRows()
+        if not indexes:
             QMessageBox.warning(self, "Ошибка", "Выберите запись для удаления!")
             return
 
         reply = QMessageBox.question(
             self, "Подтверждение",
-            "Вы уверены, что хотите удалить выбранную запись?",
+            "Удалить выбранную запись?",
             QMessageBox.Yes | QMessageBox.No
         )
+        if reply != QMessageBox.Yes:
+            return
 
-        if reply == QMessageBox.Yes:
-            row = selected[0].row()
-            proxy_index = self.proxy_model.index(row, 0)
-            source_index = self.proxy_model.mapToSource(proxy_index)
-            if self.model.removeRow(source_index.row()):
-                self.model.submitAll()
+        proxy_row = indexes[0].row()
+        source_row = self.proxy_model.mapToSource(self.proxy_model.index(proxy_row, 0)).row()
+
+        if self.model.removeRow(source_row):
+            if self.model.submitAll():
                 self.refresh_table()
-                QMessageBox.information(self, "Успех", "Запись успешно удалена!")
+                QMessageBox.information(self, "Успех", "Запись удалена!")
             else:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось удалить запись:\n{self.model.lastError().text()}")
-
+                self.model.revertAll()
+                QMessageBox.critical(self, "Ошибка", f"Не удалось удалить:\n{self.model.lastError().text()}")
+        else:
+            QMessageBox.critical(self, "Ошибка", "Не удалось удалить строку.")
 
     def closeEvent(self, event):
-        self.db.close()
+        if self.db and self.db.isOpen():
+            self.db.close()
         super().closeEvent(event)
 
 
