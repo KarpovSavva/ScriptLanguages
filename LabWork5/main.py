@@ -7,12 +7,12 @@ from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTe
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer
 
 class FetchWorker(QThread):
-    data_fetched = pyqtSignal(list)  # Signal to emit fetched data
-    error_occurred = pyqtSignal(str)  # Signal for errors
+    data_fetched = pyqtSignal(list)  
+    error_occurred = pyqtSignal(str)  
 
     def run(self):
         try:
-            time.sleep(2)  # Add delay to simulate longer request
+            time.sleep(2)  # Задержка
             response = requests.get('https://jsonplaceholder.typicode.com/posts')
             response.raise_for_status()
             data = response.json()
@@ -21,8 +21,8 @@ class FetchWorker(QThread):
             self.error_occurred.emit(str(e))
 
 class SaveWorker(QThread):
-    data_saved = pyqtSignal()  # Signal when data is saved
-    error_occurred = pyqtSignal(str)  # Signal for errors
+    data_saved = pyqtSignal()  
+    error_occurred = pyqtSignal(str)  
 
     def __init__(self, data, db_name='posts.db'):
         super().__init__()
@@ -31,11 +31,9 @@ class SaveWorker(QThread):
 
     def run(self):
         try:
-            # Simulate delay
-            time.sleep(2)  # Add delay to simulate longer save operation
+            time.sleep(2)  # Задержка
             conn = sqlite3.connect(self.db_name)
             cursor = conn.cursor()
-            # Create table if not exists
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS posts (
                     id INTEGER PRIMARY KEY,
@@ -44,7 +42,6 @@ class SaveWorker(QThread):
                     body TEXT
                 )
             ''')
-            # Insert or update data
             for post in self.data:
                 cursor.execute('''
                     INSERT OR REPLACE INTO posts (id, userId, title, body)
@@ -70,7 +67,7 @@ class MainWindow(QWidget):
         self.layout.addWidget(self.status_label)
 
         self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 0)  # Indeterminate mode
+        self.progress_bar.setRange(0, 0)  
         self.progress_bar.hide()
         self.layout.addWidget(self.progress_bar)
 
@@ -81,7 +78,7 @@ class MainWindow(QWidget):
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.start_fetch)
-        self.timer.start(10000)  # Every 10 seconds
+        self.timer.start(10000)  
 
         self.db_name = 'posts.db'
 
@@ -116,7 +113,7 @@ class MainWindow(QWidget):
         try:
             conn = sqlite3.connect(self.db_name)
             cursor = conn.cursor()
-            cursor.execute('SELECT * FROM posts LIMIT 10')  # Display first 10 for brevity
+            cursor.execute('SELECT * FROM posts LIMIT 10')  
             rows = cursor.fetchall()
             conn.close()
             display_text = ''
