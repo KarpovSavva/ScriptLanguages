@@ -1,163 +1,129 @@
 import sys
-import pandas as pd
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget,
-    QTextEdit, QComboBox, QFileDialog, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox
-)
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
-import matplotlib.pyplot as plt
-import seaborn as sns
+import time
+import json
+import sqlite3
+import requests
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTextEdit, QProgressBar, QLabel
+from PyQt5.QtCore import QThread, pyqtSignal, QTimer
 
-class MainWindow(QMainWindow):
+class FetchWorker(QThread):
+    data_fetched = pyqtSignal(list)  
+    error_occurred = pyqtSignal(str)  
+
+    def run(self):
+        try:
+            time.sleep(2)  # Задержка
+            response = requests.get('https://jsonplaceholder.typicode.com/posts')
+            response.raise_for_status()
+            data = response.json()
+            self.data_fetched.emit(data)
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+class SaveWorker(QThread):
+    data_saved = pyqtSignal()  
+    error_occurred = pyqtSignal(str)  
+
+    def __init__(self, data, db_name='posts.db'):
+        super().__init__()
+        self.data = data
+        self.db_name = db_name
+
+    def run(self):
+        try:
+            time.sleep(2)  # Задержка
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS posts (
+                    id INTEGER PRIMARY KEY,
+                    userId INTEGER,
+                    title TEXT,
+                    body TEXT
+                )
+            ''')
+            for post in self.data:
+                cursor.execute('''
+                    INSERT OR REPLACE INTO posts (id, userId, title, body)
+                    VALUES (?, ?, ?, ?)
+                ''', (post['id'], post['userId'], post['title'], post['body']))
+            conn.commit()
+            conn.close()
+            self.data_saved.emit()
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Data Visualization App")
-        self.setGeometry(100, 100, 800, 600)
+        self.setWindowTitle('Data Loader')
+        self.layout = QVBoxLayout()
 
-        self.df = None
+        self.load_button = QPushButton('Загрузить данные')
+        self.load_button.clicked.connect(self.start_fetch)
+        self.layout.addWidget(self.load_button)
 
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
+        self.status_label = QLabel('Статус: Готов')
+        self.layout.addWidget(self.status_label)
 
-        self.load_button = QPushButton("Загрузить данные из CSV")
-        self.load_button.clicked.connect(self.load_data)
-        main_layout.addWidget(self.load_button)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)  
+        self.progress_bar.hide()
+        self.layout.addWidget(self.progress_bar)
 
-        self.stats_text = QTextEdit()
-        self.stats_text.setReadOnly(True)
-        main_layout.addWidget(QLabel("Статистика по данным:"))
-        main_layout.addWidget(self.stats_text)
+        self.text_edit = QTextEdit()
+        self.layout.addWidget(self.text_edit)
 
-        self.graph_combo = QComboBox()
-        self.graph_combo.addItems(["Линейный график", "Гистограмма", "Круговая диаграмма"])
-        self.graph_combo.currentIndexChanged.connect(self.update_graph)
-        main_layout.addWidget(QLabel("Тип визуализации:"))
-        main_layout.addWidget(self.graph_combo)
+        self.setLayout(self.layout)
 
-        self.figure = Figure()
-        self.canvas = FigureCanvas(self.figure)
-        main_layout.addWidget(QLabel("График:"))
-        main_layout.addWidget(self.canvas)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.start_fetch)
+        self.timer.start(10000)  
 
-        add_layout = QHBoxLayout()
-        main_layout.addLayout(add_layout)
+        self.db_name = 'posts.db'
 
-        add_layout.addWidget(QLabel("Date:"))
-        self.date_input = QLineEdit()
-        add_layout.addWidget(self.date_input)
+    def start_fetch(self):
+        self.status_label.setText('Статус: Загрузка данных...')
+        self.progress_bar.show()
+        self.load_button.setEnabled(False)
+        self.fetch_worker = FetchWorker()
+        self.fetch_worker.data_fetched.connect(self.on_data_fetched)
+        self.fetch_worker.error_occurred.connect(self.on_error)
+        self.fetch_worker.start()
 
-        add_layout.addWidget(QLabel("Value1:"))
-        self.value1_input = QLineEdit()
-        add_layout.addWidget(self.value1_input)
+    def on_data_fetched(self, data):
+        self.status_label.setText('Статус: Сохранение данных...')
+        self.save_worker = SaveWorker(data, self.db_name)
+        self.save_worker.data_saved.connect(self.on_data_saved)
+        self.save_worker.error_occurred.connect(self.on_error)
+        self.save_worker.start()
 
-        add_layout.addWidget(QLabel("Value2:"))
-        self.value2_input = QLineEdit()
-        add_layout.addWidget(self.value2_input)
+    def on_data_saved(self):
+        self.status_label.setText('Статус: Данные сохранены')
+        self.progress_bar.hide()
+        self.load_button.setEnabled(True)
+        self.update_display()
 
-        add_layout.addWidget(QLabel("Category:"))
-        self.category_input = QLineEdit()
-        add_layout.addWidget(self.category_input)
+    def on_error(self, error_msg):
+        self.status_label.setText(f'Статус: Ошибка - {error_msg}')
+        self.progress_bar.hide()
+        self.load_button.setEnabled(True)
 
-        self.add_button = QPushButton("Добавить значение")
-        self.add_button.clicked.connect(self.add_data)
-        add_layout.addWidget(self.add_button)
-
-    def load_data(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Открыть CSV файл", "", "CSV files (*.csv)")
-        if file_path:
-            try:
-                self.df = pd.read_csv(file_path)
-                self.update_stats()
-                self.update_graph()
-            except Exception as e:
-                QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить файл: {str(e)}")
-
-    def update_stats(self):
-        if self.df is not None:
-            stats = []
-            stats.append(f"Количество строк: {len(self.df)}")
-            stats.append(f"Количество столбцов: {len(self.df.columns)}")
-
-            numeric_cols = self.df.select_dtypes(include=['number']).columns
-            for col in numeric_cols:
-                stats.append(f"{col} - Мин: {self.df[col].min()}, Макс: {self.df[col].max()}")
-                stats.append(f"{col} - Среднее: {self.df[col].mean():.2f}, Медиана: {self.df[col].median():.2f}")
-
-            self.stats_text.setText("\n".join(stats))
-
-    def update_graph(self):
-        if self.df is None:
-            return
-
-        self.figure.clear()
-        ax = self.figure.add_subplot(111)
-        graph_type = self.graph_combo.currentText()
-
+    def update_display(self):
         try:
-            if graph_type == "Линейный график":
-                # Assuming Date is sortable, convert to datetime if needed
-                self.df['Date'] = pd.to_datetime(self.df['Date'], errors='coerce')
-                sorted_df = self.df.sort_values('Date')
-                ax.plot(sorted_df['Date'], sorted_df['Value1'])
-                ax.set_title("Линейный график (Date vs Value1)")
-                ax.set_xlabel("Date")
-                ax.set_ylabel("Value1")
-                plt.xticks(rotation=45)
-
-            elif graph_type == "Гистограмма":
-                # Interpreting as bar plot for Date vs Value2
-                self.df['Date'] = pd.to_datetime(self.df['Date'], errors='coerce')
-                sorted_df = self.df.sort_values('Date')
-                sns.barplot(x=sorted_df['Date'], y=sorted_df['Value2'], ax=ax)
-                ax.set_title("Гистограмма (Date vs Value2)")
-                ax.set_xlabel("Date")
-                ax.set_ylabel("Value2")
-                plt.xticks(rotation=45)
-
-            elif graph_type == "Круговая диаграмма":
-                category_counts = self.df['Category'].value_counts()
-                ax.pie(category_counts, labels=category_counts.index, autopct='%1.1f%%')
-                ax.set_title("Круговая диаграмма (Category)")
-
-            self.canvas.draw()
-        except KeyError as e:
-            QMessageBox.warning(self, "Ошибка", f"Отсутствует столбец: {str(e)}")
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM posts LIMIT 10')  
+            rows = cursor.fetchall()
+            conn.close()
+            display_text = ''
+            for row in rows:
+                display_text += f'ID: {row[0]}, UserID: {row[1]}, Title: {row[2]}, Body: {row[3]}\n\n'
+            self.text_edit.setText(display_text)
         except Exception as e:
-            QMessageBox.warning(self, "Ошибка", f"Не удалось построить график: {str(e)}")
+            self.status_label.setText(f'Статус: Ошибка при отображении - {str(e)}')
 
-    def add_data(self):
-        if self.df is None:
-            QMessageBox.warning(self, "Ошибка", "Сначала загрузите данные.")
-            return
-
-        try:
-            date = self.date_input.text()
-            value1 = float(self.value1_input.text())
-            value2 = float(self.value2_input.text())
-            category = self.category_input.text()
-
-            new_row = pd.DataFrame({
-                'Date': [date],
-                'Value1': [value1],
-                'Value2': [value2],
-                'Category': [category]
-            })
-            self.df = pd.concat([self.df, new_row], ignore_index=True)
-
-            self.update_stats()
-            self.update_graph()
-
-            self.date_input.clear()
-            self.value1_input.clear()
-            self.value2_input.clear()
-            self.category_input.clear()
-        except ValueError:
-            QMessageBox.warning(self, "Ошибка", "Неверный формат значений Value1 или Value2 (должны быть числами).")
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
