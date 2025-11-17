@@ -9,7 +9,7 @@ def create_database():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS posts (
             id INTEGER PRIMARY KEY,
-            user_id INTEGER NOT NULL,
+            userId INTEGER NOT NULL,
             title TEXT NOT NULL,
             body TEXT NOT NULL
         )
@@ -39,9 +39,9 @@ def save_posts_to_db(posts):
     
     for post in posts:
         cursor.execute('''
-            INSERT INTO posts (id, user_id, title, body)
+            INSERT INTO posts (id, userId, title, body)
             VALUES (?, ?, ?, ?)
-        ''', (post['id'], post['user_id'], post['title'], post['body']))
+        ''', (post['id'], post['userId'], post['title'], post['body']))
     
     conn.commit()
     conn.close()
@@ -52,21 +52,21 @@ def get_posts_by_user(user_id):
     cursor = conn.cursor()
     
     cursor.execute('''
-        SELECT id, title, body FROM posts WHERE user_id = ?
+        SELECT id, title, body FROM posts WHERE userId = ?
     ''', (user_id,))
     
     rows = cursor.fetchall()
     conn.close()
     
     if rows:
-        print(f"\nПосты пользователя с user_id = {user_id}:")
+        print(f"\nПосты пользователя с userId = {user_id}:")
         for row in rows:
             print(f"\nID: {row[0]}")
             print(f"Заголовок: {row[1]}")
             print(f"Содержание: {row[2]}")
             print("-" * 50)
     else:
-        print(f"Посты для user_id = {user_id} не найдены.")
+        print(f"Посты для user_id = {userId} не найдены.")
     
     return rows
 
